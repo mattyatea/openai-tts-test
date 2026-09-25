@@ -13,7 +13,7 @@ import {
 } from './constants'
 import { liveManager } from './live/sessions'
 import { serverDefaults } from './settings'
-import { UpstreamError, buildUpstreamHeaders, joinUrl, originOf, synthesize } from './tts'
+import { UpstreamError, buildUpstreamHeaders, joinUrl, originOf, streamSynthesize, synthesize } from './tts'
 
 const os = implement(contract)
 
@@ -245,6 +245,17 @@ export const router = {
         },
       })
       return result
+    }),
+
+    stream: os.tts.stream.handler(async function* ({ input, signal }) {
+      const normalized = {
+        ...input,
+        upstream: {
+          baseUrl: normalizeBaseUrl(input.upstream.baseUrl),
+          apiKey: input.upstream.apiKey ?? serverDefaults.apiKey,
+        },
+      }
+      yield* streamSynthesize(normalized, signal)
     }),
   },
 

@@ -6,7 +6,7 @@
  *   （OpenAI 本体と Irodori-TTS-Server の両方の形式を扱う）
  */
 
-import type { SpeechRequest, SpeechResult, TtsFormat } from '../contract'
+import type { SpeechChunkEvent, SpeechRequest, SpeechResult, TtsFormat } from '../contract'
 import { MEDIA_TYPES } from './constants'
 import { SPEECH_TIMEOUT_MS } from './settings'
 
@@ -109,6 +109,69 @@ interface SseAudio {
   transcripts: string[]
 }
 
+/** 上流 SSE の 1 イベントを、このアプリの扱いやすい形へ解釈したもの。 */
+type InterpretedEvent =
+  | { kind: 'chunk'; bytes: Uint8Array; format: string; text: string; seed: number | null; totalToDecode: number | null }
+  | { kind: 'delta'; bytes: Uint8Array }
+  | { kind: 'error'; message: string }
+  | { kind: 'done' }
+
+/** SSE の 1 ブロック（空行で区切られた範囲）を event 名と data に分ける。 */
+export function parseSseBlock(block: string): { eventName: string; data: Record<string, unknown> } | null {
+  if (!block.trim()) return null
+  let eventName = 'message'
+  const dataLines: string[] = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) eventName = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+  }
+  if (!dataLines.length) return null
+  try {
+    return { eventName, data: JSON.parse(dataLines.join('\n')) as Record<string, unknown> }
+  } catch {
+    return null
+  }
+}
+
+/** 解釈したイベントを、蓄積用と逐次再生用の両方で使える形に正規化する。 */
+function interpretSseEvent(
+  eventName: string,
+  data: Record<string, unknown>,
+  request: SpeechRequest,
+): InterpretedEvent {
+  if (data.error) {
+    const error = data.error as { message?: string }
+    return { kind: 'error', message: error.message ?? JSON.stringify(data.error).slice(0, 300) }
+  }
+  if (eventName === 'error') {
+    return {
+      kind: 'error',
+      message: typeof data.message === 'string' ? data.message : 'upstream がストリーム内でエラーを返しました',
+    }
+  }
+  if (eventName === 'done' || data.type === 'speech.audio.done') return { kind: 'done' }
+
+  // Irodori-TTS-Server: 各チャンクが完全な音声ファイル
+  const complete = (data.audio_base64 as string | undefined) ?? (data.media_type ? (data.audio as string) : undefined)
+  if (typeof complete === 'string') {
+    return {
+      kind: 'chunk',
+      bytes: base64ToBytes(complete),
+      format: (data.format as string | undefined) ?? request.responseFormat,
+      text: typeof data.text === 'string' ? data.text.trim() : '',
+      seed: typeof data.seed === 'number' ? data.seed : null,
+      totalToDecode: typeof data.total_to_decode === 'number' ? data.total_to_decode : null,
+    }
+  }
+
+  // OpenAI: speech.audio.delta は生の音声バイトを base64 で運ぶ（単体では再生できない）
+  const delta = (data.audio as string | undefined) ?? (data.delta as string | undefined)
+  if (typeof delta === 'string') {
+    return { kind: 'delta', bytes: base64ToBytes(delta) }
+  }
+  return { kind: 'done' }
+}
+
 function base64ToBytes(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(value.replace(/\s+/g, ''), 'base64'))
 }
@@ -131,41 +194,6 @@ function toBlobPart(bytes: Uint8Array): BlobPart {
   return copy.buffer
 }
 
-function handleSseEvent(
-  eventName: string,
-  data: Record<string, unknown>,
-  collected: SseAudio,
-  request: SpeechRequest,
-): string | null {
-  if (data.error) {
-    const error = data.error as { message?: string }
-    return error.message ?? JSON.stringify(data.error).slice(0, 300)
-  }
-  if (eventName === 'error') {
-    return typeof data.message === 'string' ? data.message : 'upstream がストリーム内でエラーを返しました'
-  }
-  if (eventName === 'done' || data.type === 'speech.audio.done') return null
-
-  // Irodori-TTS-Server: 各チャンクが完全な音声ファイル
-  const complete = (data.audio_base64 as string | undefined) ?? (data.media_type ? (data.audio as string) : undefined)
-  if (typeof complete === 'string') {
-    collected.complete.push(base64ToBytes(complete))
-    collected.chunkFormats.push((data.format as string | undefined) ?? request.responseFormat)
-    if (typeof data.text === 'string' && data.text.trim()) collected.transcripts.push(data.text.trim())
-    return null
-  }
-
-  // OpenAI: speech.audio.delta は生の音声バイトを base64 で運ぶ
-  const delta = (data.audio as string | undefined) ?? (data.delta as string | undefined)
-  if (typeof delta === 'string') {
-    collected.deltas.push(base64ToBytes(delta))
-    if (data.type === 'speech.audio.delta' && typeof data.transcript === 'string' && data.transcript.trim()) {
-      collected.transcripts.push(data.transcript.trim())
-    }
-  }
-  return null
-}
-
 async function consumeSse(response: Response, request: SpeechRequest): Promise<SseAudio> {
   if (!response.body) throw new UpstreamError('stream の body がありません', 502)
   const collected: SseAudio = { complete: [], deltas: [], chunkFormats: [], transcripts: [] }
@@ -175,22 +203,18 @@ async function consumeSse(response: Response, request: SpeechRequest): Promise<S
   let streamError: string | null = null
 
   const processBlock = (block: string): void => {
-    if (!block.trim()) return
-    let eventName = 'message'
-    const dataLines: string[] = []
-    for (const line of block.split('\n')) {
-      if (line.startsWith('event:')) eventName = line.slice(6).trim()
-      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+    const parsed = parseSseBlock(block)
+    if (!parsed) return
+    const event = interpretSseEvent(parsed.eventName, parsed.data, request)
+    if (event.kind === 'error') {
+      streamError = event.message
+    } else if (event.kind === 'chunk') {
+      collected.complete.push(event.bytes)
+      collected.chunkFormats.push(event.format)
+      if (event.text) collected.transcripts.push(event.text)
+    } else if (event.kind === 'delta') {
+      collected.deltas.push(event.bytes)
     }
-    if (!dataLines.length) return
-    let data: Record<string, unknown>
-    try {
-      data = JSON.parse(dataLines.join('\n')) as Record<string, unknown>
-    } catch {
-      return
-    }
-    const error = handleSseEvent(eventName, data, collected, request)
-    if (error) streamError = error
   }
 
   while (true) {
@@ -306,5 +330,110 @@ export async function synthesize(request: SpeechRequest): Promise<SpeechOutcome>
       headers,
       upstreamStatus: response.status,
     },
+  }
+}
+
+/**
+ * SSE を受信しつつ、チャンクが届くたびに流す。
+ *
+ * Irodori-TTS-Server は 1 チャンク = 完全な音声ファイルなので、そのまま再生できる。
+ * OpenAI の `speech.audio.delta` は生バイトで単体再生できないため、
+ * ストリーム終了時に 1 チャンクへまとめて送出する。
+ */
+export async function* streamSynthesize(
+  request: SpeechRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<SpeechChunkEvent> {
+  const url = joinUrl(request.upstream.baseUrl, 'audio/speech')
+  const body = { ...buildSpeechBody(request), stream_format: 'sse' }
+
+  const timeout = AbortSignal.timeout(SPEECH_TIMEOUT_MS)
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
+
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...buildUpstreamHeaders(request.upstream.apiKey) },
+      body: JSON.stringify(body),
+      signal: combined,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    yield { type: 'error', message: `upstream に接続できません: ${message}` }
+    return
+  }
+
+  if (!response.ok) {
+    const detail = await readErrorDetail(response)
+    yield {
+      type: 'error',
+      message: `upstream がエラーを返しました（HTTP ${response.status}）${detail ? `: ${detail}` : ''}`,
+    }
+    return
+  }
+  if (!response.body) {
+    yield { type: 'error', message: 'stream の body がありません' }
+    return
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let index = 0
+  const pendingDeltas: Uint8Array[] = []
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const parsed = parseSseBlock(buffer.slice(0, boundary))
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf('\n\n')
+        if (!parsed) continue
+        const event = interpretSseEvent(parsed.eventName, parsed.data, request)
+        if (event.kind === 'error') {
+          yield { type: 'error', message: event.message }
+          return
+        }
+        if (event.kind === 'delta') {
+          pendingDeltas.push(event.bytes)
+          continue
+        }
+        if (event.kind !== 'chunk') continue
+        yield {
+          type: 'chunk',
+          index: index++,
+          text: event.text,
+          format: event.format,
+          mediaType: MEDIA_TYPES[event.format] ?? 'application/octet-stream',
+          audioBase64: Buffer.from(event.bytes).toString('base64'),
+          seed: event.seed,
+          totalToDecode: event.totalToDecode,
+        }
+      }
+    }
+
+    // 生デルタしか来なかった場合は、まとめて 1 チャンクとして送出する。
+    if (index === 0 && pendingDeltas.length) {
+      const merged = concatBytes(pendingDeltas)
+      yield {
+        type: 'chunk',
+        index: 0,
+        text: '',
+        format: request.responseFormat,
+        mediaType: MEDIA_TYPES[request.responseFormat] ?? 'application/octet-stream',
+        audioBase64: Buffer.from(merged).toString('base64'),
+        seed: null,
+        totalToDecode: null,
+      }
+      index = 1
+    }
+    yield { type: 'done', chunks: index }
+  } finally {
+    await reader.cancel().catch(() => undefined)
   }
 }

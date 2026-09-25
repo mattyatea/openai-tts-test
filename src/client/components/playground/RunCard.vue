@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Download, Play } from '@lucide/vue'
+import { Download, Play, Radio, Square } from '@lucide/vue'
 
 import AppButton from '../ui/AppButton.vue'
 import SectionCard from '../ui/SectionCard.vue'
@@ -8,12 +8,14 @@ import type { SpeakOutcome } from '@/client/lib/audio'
 
 defineProps<{
   running: boolean
+  streaming: boolean
+  streamChunks: number
   error: string | null
   result: SpeakOutcome | null
   headers: Record<string, string>
 }>()
 
-const emit = defineEmits<{ run: []; download: [] }>()
+const emit = defineEmits<{ run: []; stream: []; stopStream: []; download: [] }>()
 </script>
 
 <template>
@@ -22,8 +24,18 @@ const emit = defineEmits<{ run: []; download: [] }>()
       <AppButton variant="primary" :loading="running" @click="emit('run')">
         <Play class="size-3.5" />音声を生成
       </AppButton>
+      <AppButton v-if="!streaming" :disabled="running" @click="emit('stream')">
+        <Radio class="size-3.5" />ストリーミング再生
+      </AppButton>
+      <AppButton v-else variant="danger" @click="emit('stopStream')">
+        <Square class="size-3.5" />停止
+      </AppButton>
       <span class="text-[11px] text-slate-500">⌘/Ctrl + Enter でも実行</span>
     </div>
+
+    <p v-if="streaming" class="mt-2 text-[11px] text-sky-300">
+      受信中… {{ streamChunks }} チャンクを再生しました（届いた順に鳴ります）
+    </p>
 
     <StatusNote v-if="error" class="mt-3" tone="error" :message="error" />
 

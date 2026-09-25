@@ -133,6 +133,29 @@ export const SpeechResultSchema = z.object({
 })
 export type SpeechResult = z.infer<typeof SpeechResultSchema>
 
+/**
+ * ストリーミング合成のイベント。
+ *
+ * Irodori-TTS-Server は 1 チャンク = 完全な音声ファイルを返すので、
+ * 届いた順にそのまま再生できる。OpenAI の生デルタのように
+ * 単体で再生できないものは、最後に 1 チャンクへまとめて送出する。
+ */
+export const SpeechChunkEventSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('chunk'),
+    index: z.number().int(),
+    text: z.string(),
+    format: z.string(),
+    mediaType: z.string(),
+    audioBase64: z.string(),
+    seed: z.number().nullable(),
+    totalToDecode: z.number().nullable(),
+  }),
+  z.object({ type: z.literal('done'), chunks: z.number().int() }),
+  z.object({ type: z.literal('error'), message: z.string() }),
+])
+export type SpeechChunkEvent = z.infer<typeof SpeechChunkEventSchema>
+
 // ------------------------------------------------------------------ GPT Live
 
 export const LiveVoiceSchema = z.object({
@@ -149,13 +172,18 @@ export const LiveStartInputSchema = z.object({
   version: z.enum(['v1', 'v3']).default('v3'),
   voice: z.string().optional(),
   /**
-   * システムプロンプト。Codex バックエンドの developer instructions として
-   * thread 作成時に渡す（人格・役割・制約・話し方など）。
+   * realtime セッションのシステムプロンプト。
+   *
+   * Codex 側の `prompt` 引数にそのまま渡り、既定の「You are Codex」という
+   * 汎用人格を置き換える。人格・役割・口調・制約はここに書く。
    */
   systemPrompt: z.string().optional(),
-  /** realtime セッション開始時だけに渡す追加指示。 */
+  /**
+   * 会話コンテキストへ developer 指示として足す追加の指示。
+   * システムプロンプトとは別枠で、上限は約 8192 トークン。
+   */
   instructions: z.string().optional(),
-  /** セッション開始時に一度だけ渡すプロンプト（最初の挨拶などに使う）。 */
+  /** システムプロンプト末尾へ「セッション開始時」として追記する振る舞い。 */
   initialPrompt: z.string().optional(),
   /**
    * Codex の起動コンテキストを realtime セッションに含めるか。
@@ -175,6 +203,8 @@ export const LiveStartResultSchema = z.object({
   realtimeSessionId: z.string().nullable(),
   voice: z.string().nullable(),
   codexUserAgent: z.string().nullable(),
+  /** 実際に realtime へシステムプロンプトとして渡した文字列（未指定なら null）。 */
+  systemPromptSent: z.string().nullable(),
 })
 export type LiveStartResult = z.infer<typeof LiveStartResultSchema>
 
@@ -277,6 +307,8 @@ export const contract = {
   },
   tts: {
     speak: oc.input(SpeechRequestSchema).output(SpeechResultSchema),
+    /** SSE を受けて、チャンクが届くたびに流す。 */
+    stream: oc.input(SpeechRequestSchema).output(eventIterator(SpeechChunkEventSchema)),
   },
   live: {
     voices: oc.output(LiveVoiceSchema),

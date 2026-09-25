@@ -14,6 +14,7 @@ import { useToast } from '../composables/useToast'
 import { useTtsOptionLists, useTtsSettings } from '../composables/useTtsSettings'
 import { useUpstreamProbe } from '../composables/useUpstreamProbe'
 import { downloadBlob, speakToUrl, type SpeakOutcome } from '../lib/audio'
+import { playStream, type StreamingSpeechHandle } from '../lib/audio'
 import { errorMessage } from '../lib/orpc'
 import { useLocalStorage } from '../lib/useLocalStorage'
 
@@ -30,6 +31,9 @@ const running = ref(false)
 const runError = ref<string | null>(null)
 const result = ref<SpeakOutcome | null>(null)
 const lastHeaders = ref<Record<string, string>>({})
+const streamChunks = ref(0)
+const streaming = ref(false)
+let streamHandle: StreamingSpeechHandle | null = null
 
 const kind = computed(
   () => info.value?.presets.find((preset) => preset.id === settings.value.presetId)?.kind ?? 'custom',
@@ -156,6 +160,45 @@ async function run(): Promise<void> {
   }
 }
 
+/** SSE を受信しながら順番に再生する。Irodori はチャンクが届くそばから鳴る。 */
+async function runStream(): Promise<void> {
+  if (streaming.value) return
+  if (!text.value.trim()) {
+    toast.error('テキストを入力してください')
+    return
+  }
+  streaming.value = true
+  streamChunks.value = 0
+  runError.value = null
+  const request = { ...builtRequest.value, useSse: true }
+  try {
+    streamHandle = playStream(request, {
+      onProgress: ({ chunkCount }) => {
+        streamChunks.value = chunkCount
+      },
+      onError: (message) => {
+        runError.value = message
+        toast.error('ストリーミングに失敗しました', message)
+      },
+    })
+    await streamHandle.done
+    if (streamChunks.value > 0) {
+      toast.ok(`${streamChunks.value} チャンクを受信して再生しました`)
+    }
+  } catch (caught) {
+    runError.value = errorMessage(caught)
+  } finally {
+    streaming.value = false
+    streamHandle = null
+  }
+}
+
+function stopStream(): void {
+  streamHandle?.stop()
+  streaming.value = false
+  toast.show('ストリーミング再生を止めました')
+}
+
 function download(): void {
   if (!result.value) return
   downloadBlob(result.value.blob, `speech.${settings.value.format}`)
@@ -203,10 +246,14 @@ function copy(value: string, label: string): void {
 
       <RunCard
         :running="running"
+        :streaming="streaming"
+        :stream-chunks="streamChunks"
         :error="runError"
         :result="result"
         :headers="lastHeaders"
         @run="run"
+        @stream="runStream"
+        @stop-stream="stopStream"
         @download="download"
       />
 

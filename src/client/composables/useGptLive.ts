@@ -42,6 +42,8 @@ export function useGptLive() {
   const sessionId = ref<string | null>(null)
   const version = ref<string | null>(null)
   const error = ref<string | null>(null)
+  /** 実際に realtime へ渡したシステムプロンプト。 */
+  const sentSystemPrompt = ref<string | null>(null)
   const transcripts = shallowRef<LiveTranscript[]>([])
   const remoteAudioActive = ref(false)
   const micActive = ref(false)
@@ -169,16 +171,21 @@ export function useGptLive() {
   }
 
   async function consumeEvents(id: string): Promise<void> {
-    eventAbort = new AbortController()
+    // stop() が eventAbort を null にしても判定できるよう、ローカルに保持する。
+    const controller = new AbortController()
+    eventAbort = controller
     try {
-      const iterator = await client.live.events({ sessionId: id }, { signal: eventAbort.signal })
+      const iterator = await client.live.events({ sessionId: id }, { signal: controller.signal })
       for await (const event of iterator) {
         await handleEvent(event)
       }
     } catch (caught) {
-      if (!eventAbort?.signal.aborted) {
+      // 自分で止めたときの AbortError はエラー表示しない。
+      if (!controller.signal.aborted) {
         error.value = errorMessage(caught)
       }
+    } finally {
+      if (eventAbort === controller) eventAbort = null
     }
   }
 
@@ -254,6 +261,7 @@ export function useGptLive() {
       })
       sessionId.value = started.sessionId
       version.value = started.version
+      sentSystemPrompt.value = started.systemPromptSent
 
       await created.setRemoteDescription({ type: 'answer', sdp: started.sdp })
       statusMessage.value = 'WebRTC のネゴシエーション完了。音声の疎通を待っています…'
@@ -283,6 +291,7 @@ export function useGptLive() {
     remoteAudioActive.value = false
     state.value = 'idle'
     statusMessage.value = '未接続'
+    error.value = null
   }
 
   async function sendText(text: string): Promise<void> {
@@ -312,6 +321,7 @@ export function useGptLive() {
     sessionId,
     version,
     error,
+    sentSystemPrompt,
     transcripts,
     micActive,
     remoteAudioActive,

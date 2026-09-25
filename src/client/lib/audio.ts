@@ -1,5 +1,5 @@
 import type { TtsFormat } from '@/contract'
-import { client } from './orpc'
+import { client, errorMessage } from './orpc'
 
 export const MEDIA_TYPES: Record<TtsFormat, string> = {
   mp3: 'audio/mpeg',
@@ -76,4 +76,103 @@ export function downloadBlob(blob: Blob, filename: string): void {
   anchor.download = filename
   anchor.click()
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+/** base64 を ArrayBuffer に戻す。Blob へそのまま渡せる型にするため buffer を返す。 */
+function base64ToArrayBuffer(value: string): ArrayBuffer {
+  const binary = atob(value.replace(/\s+/g, ''))
+  const buffer = new ArrayBuffer(binary.length)
+  const view = new Uint8Array(buffer)
+  for (let index = 0; index < binary.length; index += 1) view[index] = binary.charCodeAt(index)
+  return buffer
+}
+
+export interface StreamingSpeechHandle {
+  /** 受信したチャンク数。 */
+  readonly chunkCount: number
+  /** 生成が終わるまで待つ。 */
+  done: Promise<void>
+  stop: () => void
+}
+
+/**
+ * tts.stream を購読し、チャンクが届くたびに順番に再生する。
+ * Irodori は 1 チャンクが完全な音声ファイルなので、受信しながら鳴らせる。
+ */
+export function playStream(
+  request: Parameters<typeof client.tts.stream>[0],
+  options: {
+    onProgress?: (info: { chunkCount: number; playing: boolean }) => void
+    onError?: (message: string) => void
+  } = {},
+): StreamingSpeechHandle {
+  const controller = new AbortController()
+  let chunkCount = 0
+  let stopped = false
+  let current: HTMLAudioElement | null = null
+  const blobUrls: string[] = []
+
+  /** 1 チャンクを再生し終わるまで待つ。 */
+  function playBlob(blob: Blob): Promise<void> {
+    if (stopped) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      const url = URL.createObjectURL(blob)
+      blobUrls.push(url)
+      const audio = new Audio(url)
+      current = audio
+      audio.onended = () => {
+        current = null
+        resolve()
+      }
+      audio.onerror = () => {
+        current = null
+        reject(new Error('音声の再生に失敗しました'))
+      }
+      audio.play().catch((error: unknown) => {
+        current = null
+        reject(error)
+      })
+    })
+  }
+
+  async function run(): Promise<void> {
+    // 受信したチャンクを、届いた順に直列で鳴らす。
+    let chain: Promise<void> = Promise.resolve()
+    try {
+      const iterator = await client.tts.stream(request, { signal: controller.signal })
+      for await (const event of iterator) {
+        if (stopped) break
+        if (event.type === 'error') {
+          options.onError?.(event.message)
+          continue
+        }
+        if (event.type !== 'chunk') continue
+        chunkCount += 1
+        const blob = new Blob([base64ToArrayBuffer(event.audioBase64)], { type: event.mediaType })
+        options.onProgress?.({ chunkCount, playing: true })
+        chain = chain.then(() => playBlob(blob))
+      }
+      await chain
+    } finally {
+      options.onProgress?.({ chunkCount, playing: false })
+      for (const url of blobUrls) URL.revokeObjectURL(url)
+    }
+  }
+
+  return {
+    get chunkCount() {
+      return chunkCount
+    },
+    done: run().catch((error) => {
+      if (!controller.signal.aborted) options.onError?.(errorMessage(error))
+    }),
+    stop: () => {
+      stopped = true
+      controller.abort()
+      if (current) {
+        current.pause()
+        current = null
+      }
+    },
+  }
 }

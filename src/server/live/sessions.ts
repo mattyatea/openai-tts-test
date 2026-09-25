@@ -238,6 +238,7 @@ export class LiveManager {
     realtimeSessionId: string | null
     voice: string | null
     codexUserAgent: string | null
+    systemPromptSent: string | null
   }> {
     await this.ensureStarted()
 
@@ -248,8 +249,6 @@ export class LiveManager {
         ephemeral: true,
         approvalPolicy: 'never',
         sandbox: 'read-only',
-        // システムプロンプトは Codex 側の developer instructions として渡す。
-        ...(input.systemPrompt?.trim() ? { developerInstructions: input.systemPrompt.trim() } : {}),
         ...(input.model ? { model: input.model } : {}),
       },
       30_000,
@@ -271,9 +270,21 @@ export class LiveManager {
     }
     this.sessions.set(session.id, session)
 
-    // システムプロンプトと開始時の追加指示を 1 つにまとめて realtime モデルへ渡す。
-    // Codex 側の developer instructions だけでは口調や人格が薄まるため、両方に渡す。
-    const sessionInstructions = [input.systemPrompt?.trim(), input.instructions?.trim()]
+    /**
+     * Codex 本体の実装（core/src/realtime_prompt.rs）では、realtime セッションの
+     * システムプロンプトは `prompt` 引数がそのまま使われる。未指定のときだけ
+     * 「You are Codex, an OpenAI general-purpose agentic assistant」という既定文が入る。
+     *
+     * つまり人格を差し替えるには `prompt` に渡す必要がある。
+     * `realtimeStartInstructions` は会話コンテキストに足される developer 断片で、
+     * システムプロンプトそのものではない。
+     */
+    const backendPrompt = [
+      input.systemPrompt?.trim(),
+      input.initialPrompt?.trim()
+        ? `## セッション開始時\n${input.initialPrompt.trim()}`
+        : undefined,
+    ]
       .filter((part): part is string => Boolean(part))
       .join('\n\n')
 
@@ -294,9 +305,10 @@ export class LiveManager {
           transport: { type: 'webrtc', sdp: input.sdp },
           version: input.version,
           ...(input.voice ? { voice: input.voice } : {}),
-          // リアルタイムモデル自身に効かせる指示。Codex の起動コンテキストより優先させたい内容はここへ。
-          ...(sessionInstructions ? { realtimeStartInstructions: sessionInstructions } : {}),
-          ...(input.initialPrompt ? { prompt: input.initialPrompt } : {}),
+          // realtime モデルのシステムプロンプト。既定の Codex 人格を置き換える。
+          ...(backendPrompt ? { prompt: backendPrompt } : {}),
+          // 会話コンテキストへ足す developer 指示（システムプロンプトとは別枠）。
+          ...(input.instructions?.trim() ? { realtimeStartInstructions: input.instructions.trim() } : {}),
           ...(input.includeStartupContext === false ? { includeStartupContext: false } : {}),
         },
         30_000,
@@ -310,6 +322,7 @@ export class LiveManager {
         realtimeSessionId: session.realtimeSessionId,
         voice: session.voice,
         codexUserAgent: this.appServer.userAgent,
+        systemPromptSent: backendPrompt || null,
       }
     } catch (error) {
       this.sessions.delete(session.id)

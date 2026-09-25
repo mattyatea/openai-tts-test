@@ -28,6 +28,7 @@ defineProps<{
   micActive: boolean
   remoteAudioActive: boolean
   voiceOptions: Array<{ value: string; label: string }>
+  sentSystemPrompt: string | null
 }>()
 
 const emit = defineEmits<{ start: []; stop: []; voices: [] }>()
@@ -63,7 +64,7 @@ const emit = defineEmits<{ start: []; stop: []; voices: [] }>()
 
       <FieldRow
         label="システムプロンプト"
-        hint="Codex の developer instructions と realtime の開始指示の両方に渡します"
+        hint="GPT Live 本体のシステムプロンプト。既定の Codex 人格を置き換えます"
       >
         <AppTextarea
           v-model="settings.systemPrompt"
@@ -72,18 +73,18 @@ const emit = defineEmits<{ start: []; stop: []; voices: [] }>()
         />
       </FieldRow>
 
-      <FieldRow label="開始時の追加指示" hint="realtime セッション開始時だけに渡す指示">
+      <FieldRow label="追加指示" hint="システムプロンプトとは別に、会話コンテキストへ developer 指示として足します">
         <AppTextarea v-model="settings.instructions" :rows="2" />
       </FieldRow>
 
-      <FieldRow label="最初のプロンプト" hint="セッション開始時の最初の発話を促す">
+      <FieldRow label="冒頭の振る舞い" hint="システムプロンプト末尾へ「セッション開始時」として追記します">
         <AppTextarea v-model="settings.initialPrompt" :rows="2" />
       </FieldRow>
 
       <AppSwitch
         v-model="settings.includeStartupContext"
-        label="Codex の起動コンテキストを含める"
-        hint="オフにすると Codex 標準の振る舞いを外し、上のシステムプロンプトを優先します"
+        label="Codex の起動コンテキストを追記する"
+        hint="オフのままにするとシステムプロンプトだけが効きます"
       />
 
       <AppSwitch
@@ -112,6 +113,13 @@ const emit = defineEmits<{ start: []; stop: []; voices: [] }>()
           <Volume2 class="size-3" />受信トラック{{ remoteAudioActive ? 'あり' : 'なし' }}
         </span>
       </div>
+
+      <details v-if="sentSystemPrompt">
+        <summary class="cursor-pointer text-[11px] text-slate-400 select-none">
+          実際に realtime へ渡したシステムプロンプト
+        </summary>
+        <pre class="code-block mt-2">{{ sentSystemPrompt }}</pre>
+      </details>
     </div>
   </SectionCard>
 </template>

@@ -221,6 +221,7 @@ onBeforeUnmount(() => {
         :mic-active="live.micActive.value"
         :remote-audio-active="live.remoteAudioActive.value"
         :voice-options="liveVoiceOptions"
+        :sent-system-prompt="live.sentSystemPrompt.value"
         @start="start"
         @stop="stop"
         @voices="loadVoices"
