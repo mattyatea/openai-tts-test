@@ -15,6 +15,8 @@ export interface LiveSettings {
   instructions: string
   initialPrompt: string
   playGptAudio: boolean
+  /** Codex の起動コンテキストを realtime に含めるか。 */
+  includeStartupContext: boolean
 }
 
 const settings = defineModel<LiveSettings>({ required: true })
@@ -61,7 +63,7 @@ const emit = defineEmits<{ start: []; stop: []; voices: [] }>()
 
       <FieldRow
         label="システムプロンプト"
-        hint="Codex の developer instructions として thread 作成時に渡されます"
+        hint="Codex の developer instructions と realtime の開始指示の両方に渡します"
       >
         <AppTextarea
           v-model="settings.systemPrompt"
@@ -77,6 +79,12 @@ const emit = defineEmits<{ start: []; stop: []; voices: [] }>()
       <FieldRow label="最初のプロンプト" hint="セッション開始時の最初の発話を促す">
         <AppTextarea v-model="settings.initialPrompt" :rows="2" />
       </FieldRow>
+
+      <AppSwitch
+        v-model="settings.includeStartupContext"
+        label="Codex の起動コンテキストを含める"
+        hint="オフにすると Codex 標準の振る舞いを外し、上のシステムプロンプトを優先します"
+      />
 
       <AppSwitch
         v-model="settings.playGptAudio"

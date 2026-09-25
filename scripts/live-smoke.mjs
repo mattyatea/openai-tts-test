@@ -65,9 +65,14 @@ const started = await rpc('live/start', {
     sdp: pc.localDescription.sdp,
     version: 'v3',
     voice: 'cove',
-    systemPrompt: 'あなたは日本語で話すアシスタントです。短く1文だけ返してください。',
+    systemPrompt: [
+      'あなたは「ヨミ」という名前の日本語アシスタントです。',
+      '一人称は「私」。返答は短く1文だけ。',
+      '箇条書きや記号は使わず、話し言葉で返してください。',
+    ].join('\n'),
     instructions: '落ち着いた速さではっきり話してください。',
     initialPrompt: 'これから音声で会話します。最初に短く挨拶してください。',
+    includeStartupContext: false,
   },
 })
 log('sessionId', started.sessionId, '| answer bytes', String(started.sdp?.length))

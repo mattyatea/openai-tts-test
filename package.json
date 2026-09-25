@@ -14,7 +14,8 @@
     "start": "node --env-file-if-exists=.env dist/server/index.js",
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.server.json",
     "preview": "vite preview",
-    "smoke:live": "node scripts/live-smoke.mjs"
+    "smoke:live": "node scripts/live-smoke.mjs",
+    "smoke:tts": "node scripts/tts-smoke.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.6",

@@ -187,6 +187,7 @@ export function useGptLive() {
     systemPrompt?: string
     instructions?: string
     initialPrompt?: string
+    includeStartupContext?: boolean
   }): Promise<boolean> {
     if (peer) return false
     reset()
@@ -249,6 +250,7 @@ export function useGptLive() {
         systemPrompt: options.systemPrompt,
         instructions: options.instructions,
         initialPrompt: options.initialPrompt,
+        includeStartupContext: options.includeStartupContext,
       })
       sessionId.value = started.sessionId
       version.value = started.version

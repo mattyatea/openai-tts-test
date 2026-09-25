@@ -83,7 +83,8 @@ watch(
     if (!settings.value.baseUrl) settings.value.baseUrl = value.defaults.baseUrl
     const matched = value.presets.find((preset) => preset.baseUrl === settings.value.baseUrl)
     settings.value.presetId = matched?.id ?? 'custom'
-    irodoriEnabled.value = matched?.kind === 'irodori'
+    irodoriEnabled.value = matched?.useIrodori === true || matched?.kind === 'irodori'
+    void refreshUpstreamLists()
   },
   { once: true },
 )
@@ -93,17 +94,16 @@ function applyPreset(id: string): void {
   if (!preset) return
   settings.value.presetId = id
   if (preset.baseUrl) settings.value.baseUrl = preset.baseUrl
-  if (preset.kind === 'irodori') {
-    settings.value.model = 'irodori-tts'
-    settings.value.voice = 'none'
-    irodoriEnabled.value = true
-  } else if (preset.kind === 'openai') {
-    settings.value.model = info.value?.openaiModels[0] ?? 'gpt-4o-mini-tts'
-    settings.value.voice = info.value?.openaiVoices[0] ?? 'coral'
-    irodoriEnabled.value = false
-  } else {
-    irodoriEnabled.value = false
-  }
+  if (preset.defaultModel) settings.value.model = preset.defaultModel
+  if (preset.defaultVoice) settings.value.voice = preset.defaultVoice
+  irodoriEnabled.value = preset.useIrodori === true
+  // プリセットを選んだら、そのサーバーのモデル・ボイス一覧を取り直す。
+  void refreshUpstreamLists()
+}
+
+async function refreshUpstreamLists(): Promise<void> {
+  await probe.loadModels(settings.value.baseUrl, settings.value.apiKey || undefined)
+  await probe.loadVoices(settings.value.baseUrl, settings.value.apiKey || undefined)
 }
 
 async function checkUpstream(): Promise<void> {

@@ -29,6 +29,12 @@ export const ProviderPresetSchema = z.object({
   kind: ProviderKindSchema,
   baseUrl: z.string(),
   hint: z.string(),
+  /** 選んだときに初期値として入れるモデル。 */
+  defaultModel: z.string().optional(),
+  /** 選んだときに初期値として入れるボイス。 */
+  defaultVoice: z.string().optional(),
+  /** true なら最初から irodori オブジェクトを有効にする。 */
+  useIrodori: z.boolean().optional(),
 })
 export type ProviderPreset = z.infer<typeof ProviderPresetSchema>
 
@@ -151,6 +157,11 @@ export const LiveStartInputSchema = z.object({
   instructions: z.string().optional(),
   /** セッション開始時に一度だけ渡すプロンプト（最初の挨拶などに使う）。 */
   initialPrompt: z.string().optional(),
+  /**
+   * Codex の起動コンテキストを realtime セッションに含めるか。
+   * 既定は true。なりきりや別人格を優先したいときは false にする。
+   */
+  includeStartupContext: z.boolean().optional(),
   model: z.string().optional(),
 })
 export type LiveStartInput = z.infer<typeof LiveStartInputSchema>

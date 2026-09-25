@@ -23,6 +23,9 @@ export const host = env('HOST') ?? '127.0.0.1'
 export const port = Number(env('PORT') ?? '8790')
 export const codexBin = env('CODEX_BIN') ?? 'codex'
 
+/** Irodori-TTS-Server のプリセット接続先。 */
+export const irodoriBaseUrl = env('IRODORI_BASE_URL') ?? 'http://lab-02.internal.nanasi-apps.xyz:8088/v1'
+
 /** 生成は長め、接続確認は短め。 */
 export const SPEECH_TIMEOUT_MS = Number(env('SPEECH_TIMEOUT_MS') ?? '300000')
 export const PROBE_TIMEOUT_MS = Number(env('PROBE_TIMEOUT_MS') ?? '15000')

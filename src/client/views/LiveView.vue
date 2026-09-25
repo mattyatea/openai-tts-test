@@ -7,10 +7,12 @@ import SpeakingLogCard, { type SpeakingLogEntry } from '../components/live/Speak
 import TranscriptCard from '../components/live/TranscriptCard.vue'
 import TtsTargetCard from '../components/live/TtsTargetCard.vue'
 import { useGptLive } from '../composables/useGptLive'
+import { useIrodoriOptions } from '../composables/useIrodoriOptions'
 import { useServerInfo } from '../composables/useServerInfo'
 import { useSpeechQueue } from '../composables/useSpeechQueue'
 import { useToast } from '../composables/useToast'
-import { useTtsOptionLists, useTtsSettings } from '../composables/useTtsSettings'
+import { useTtsSettings } from '../composables/useTtsSettings'
+import { useUpstreamProbe } from '../composables/useUpstreamProbe'
 import type { LiveVoices } from '@/contract'
 import { client, errorMessage } from '../lib/orpc'
 import { useLocalStorage } from '../lib/useLocalStorage'
@@ -29,6 +31,8 @@ const liveSettings = useLocalStorage<LiveSettings>('tts-lab.live.settings', {
   instructions: '音声で会話します。落ち着いた速さではっきり話してください。',
   initialPrompt: 'これから音声で会話します。最初に短く挨拶してください。',
   playGptAudio: false,
+  // Codex 標準の振る舞いより、上のシステムプロンプトを優先させる。
+  includeStartupContext: false,
 })
 
 const tts = useTtsSettings('tts-lab.live.tts', {
@@ -43,13 +47,73 @@ const ttsSettings = tts.settings
 const voices = ref<LiveVoices | null>(null)
 const manualText = ref('')
 const speakingLog = ref<SpeakingLogEntry[]>([])
+const ttsProbe = useUpstreamProbe()
+
+const irodoriEnabled = ref(false)
+const irodori = useIrodoriOptions(irodoriEnabled)
 
 const queue = useSpeechQueue({
-  buildRequest: (text) => tts.buildRequest(text),
+  buildRequest: (text) => tts.buildRequest(text, { irodori: irodori.build() }),
   onError: (message) => toast.error('読み上げに失敗しました', message),
 })
 
-const { modelOptions, voiceOptions } = useTtsOptionLists(info)
+const presetOptions = computed(
+  () =>
+    info.value?.presets
+      .filter((preset) => preset.baseUrl || preset.kind === 'custom')
+      .map((preset) => ({ value: preset.id, label: preset.label })) ?? [],
+)
+
+const ttsKind = computed(
+  () => info.value?.presets.find((preset) => preset.id === ttsSettings.value.presetId)?.kind ?? 'openai',
+)
+
+/** OpenAI なら既知のボイス、Irodori なら upstream から取得したモデル・ボイスを使う。 */
+const ttsModelOptions = computed(() => {
+  const values =
+    ttsKind.value === 'openai'
+      ? [...(info.value?.openaiModels ?? []), ttsSettings.value.model]
+      : [ttsSettings.value.model, ...ttsProbe.models.value.map((model) => model.id)]
+  return [...new Set(values.filter(Boolean))].map((value) => ({ value, label: value }))
+})
+
+const ttsVoiceOptions = computed(() => {
+  const values =
+    ttsKind.value === 'openai'
+      ? [...(info.value?.openaiVoices ?? []), ttsSettings.value.voice]
+      : [ttsSettings.value.voice, 'none', ...ttsProbe.voices.value.map((voice) => voice.id)]
+  return [...new Set(values.filter(Boolean))].map((value) => ({ value, label: value }))
+})
+
+async function applyTtsPreset(id: string): Promise<void> {
+  const preset = info.value?.presets.find((entry) => entry.id === id)
+  if (!preset) return
+  ttsSettings.value.presetId = id
+  if (preset.baseUrl) ttsSettings.value.baseUrl = preset.baseUrl
+  if (preset.defaultModel) ttsSettings.value.model = preset.defaultModel
+  if (preset.defaultVoice) ttsSettings.value.voice = preset.defaultVoice
+  irodoriEnabled.value = preset.useIrodori === true
+  await refreshTtsLists()
+}
+
+async function refreshTtsLists(): Promise<void> {
+  await ttsProbe.loadModels(ttsSettings.value.baseUrl, ttsSettings.value.apiKey || undefined)
+  await ttsProbe.loadVoices(ttsSettings.value.baseUrl, ttsSettings.value.apiKey || undefined)
+}
+
+watch(
+  () => info.value,
+  (value) => {
+    if (!value) return
+    const matched = value.presets.find((preset) => preset.baseUrl === ttsSettings.value.baseUrl)
+    if (matched) {
+      ttsSettings.value.presetId = matched.id
+      irodoriEnabled.value = matched.useIrodori === true
+    }
+    void refreshTtsLists()
+  },
+  { once: true },
+)
 
 const liveVoiceOptions = computed(() => {
   const list = voices.value
@@ -88,6 +152,7 @@ async function start(): Promise<void> {
     systemPrompt: liveSettings.value.systemPrompt,
     instructions: liveSettings.value.instructions,
     initialPrompt: liveSettings.value.initialPrompt,
+    includeStartupContext: liveSettings.value.includeStartupContext,
   })
   if (ok) {
     toast.ok('GPT Live セッションを開始しました', 'マイクに話しかけてください')
@@ -126,7 +191,9 @@ async function sendManual(): Promise<void> {
 
 async function testSpeak(): Promise<void> {
   try {
-    const result = await client.tts.speak(tts.buildRequest('これは読み上げテストです。'))
+    const result = await client.tts.speak(
+      tts.buildRequest('これは読み上げテストです。', { irodori: irodori.build() }),
+    )
     const url = URL.createObjectURL(result.audio)
     await new Audio(url).play()
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
@@ -161,13 +228,17 @@ onBeforeUnmount(() => {
 
       <TtsTargetCard
         v-model="ttsSettings"
-        :presets="info?.presets ?? []"
-        :model-options="modelOptions"
-        :voice-options="voiceOptions"
+        v-model:irodori-enabled="irodoriEnabled"
+        v-model:irodori-fields="irodori.fields"
+        :preset-options="presetOptions"
+        :kind="ttsKind"
+        :model-options="ttsModelOptions"
+        :voice-options="ttsVoiceOptions"
         :pending-count="queue.pendingCount.value"
         :speaking="queue.speaking.value"
         @test="testSpeak"
         @stop="queue.stop()"
+        @preset="applyTtsPreset"
       />
 
       <SpeakingLogCard :entries="speakingLog" />

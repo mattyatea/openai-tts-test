@@ -4,12 +4,13 @@ import { TriangleAlert } from '@lucide/vue'
 import SectionCard from '../ui/SectionCard.vue'
 
 const points = [
-  'マイク音声はブラウザから WebRTC で直接 GPT Live（Codex app-server の realtime）へ送られます。',
-  'GPT Live の返答テキストを受け取り、音声トラックは破棄して、右の OpenAI TTS で読み直します。',
-  'システムプロンプトは Codex 側の developer instructions として thread 作成時に渡します。',
+  'マイク音声は WebRTC の音声トラックとして直接 GPT Live（Codex app-server の realtime）へ送られます。',
+  'GPT Live の返答テキストを受け取り、音声トラックは破棄して、左下の TTS で読み直します。',
+  'システムプロンプトは Codex の developer instructions と realtime の開始指示の両方に渡します。',
+  '「Codex の起動コンテキストを含める」をオフにすると、Codex 標準の振る舞いを外してシステムプロンプトを優先させられます。',
   'realtime は Codex のログイン（ChatGPT アカウント）で認証します。API キー方式では動きません。',
   '音声トラックは受け取る必要があります（V3 の仕様）。「受信トラックあり」でも再生しなければ音は鳴りません。',
-  'GPT Live の音声を止めている間は、相手の発話終了検知はマイク入力だけで動きます。割り込みはマイクから行ってください。',
+  '応答はマイク入力の VAD で始まります。テキスト送信だけでは応答が生成されないことがあります。',
 ]
 </script>
 

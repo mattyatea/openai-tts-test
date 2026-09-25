@@ -228,6 +228,7 @@ export class LiveManager {
     systemPrompt?: string
     instructions?: string
     initialPrompt?: string
+    includeStartupContext?: boolean
     model?: string
   }): Promise<{
     sessionId: string
@@ -270,6 +271,12 @@ export class LiveManager {
     }
     this.sessions.set(session.id, session)
 
+    // システムプロンプトと開始時の追加指示を 1 つにまとめて realtime モデルへ渡す。
+    // Codex 側の developer instructions だけでは口調や人格が薄まるため、両方に渡す。
+    const sessionInstructions = [input.systemPrompt?.trim(), input.instructions?.trim()]
+      .filter((part): part is string => Boolean(part))
+      .join('\n\n')
+
     const sdpPromise = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingSdp.delete(threadId)
@@ -287,8 +294,10 @@ export class LiveManager {
           transport: { type: 'webrtc', sdp: input.sdp },
           version: input.version,
           ...(input.voice ? { voice: input.voice } : {}),
-          ...(input.instructions ? { realtimeStartInstructions: input.instructions } : {}),
+          // リアルタイムモデル自身に効かせる指示。Codex の起動コンテキストより優先させたい内容はここへ。
+          ...(sessionInstructions ? { realtimeStartInstructions: sessionInstructions } : {}),
           ...(input.initialPrompt ? { prompt: input.initialPrompt } : {}),
+          ...(input.includeStartupContext === false ? { includeStartupContext: false } : {}),
         },
         30_000,
       )

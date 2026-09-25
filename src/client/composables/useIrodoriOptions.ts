@@ -41,6 +41,7 @@ const BOOLEAN_FIELDS: Array<keyof IrodoriOptions> = [
   'context_kv_cache',
   'trim_tail',
   'chunking_enabled',
+  'no_ref',
 ]
 
 const TEXT_FIELDS: Array<keyof IrodoriOptions> = [
@@ -53,6 +54,9 @@ const TEXT_FIELDS: Array<keyof IrodoriOptions> = [
   't_schedule_mode',
   'decode_mode',
 ]
+
+/** カンマ区切りで入力し、配列として送るフィールド。 */
+const LIST_FIELDS: Array<keyof IrodoriOptions> = ['ref_wavs', 'ref_latents']
 
 export function useIrodoriOptions(enabled: ReturnType<typeof ref<boolean>> = ref(false)) {
   const fields = reactive<Record<string, string>>({})
@@ -75,6 +79,12 @@ export function useIrodoriOptions(enabled: ReturnType<typeof ref<boolean>> = ref
       const raw = fields[name as string]?.trim()
       if (!raw) continue
       ;(options as Record<string, unknown>)[name] = raw
+    }
+    for (const name of LIST_FIELDS) {
+      const raw = fields[name as string]?.trim()
+      if (!raw) continue
+      const parts = raw.split(',').map((item) => item.trim()).filter(Boolean)
+      if (parts.length) (options as Record<string, unknown>)[name] = parts
     }
     return Object.keys(options).length ? options : undefined
   }

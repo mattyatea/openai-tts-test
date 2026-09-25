@@ -20,9 +20,14 @@ Vue 3 + Reka UI + Tailwind CSS の SPA と、Hono + oRPC の API サーバーで
 
 - ブラウザが WebRTC で直接 GPT Live（Codex app-server の realtime）と接続
 - GPT Live の音声トラックは受け取りますが、再生せず破棄できます
-- 返答が確定した時点で、右側の OpenAI TTS が読み上げ
-- `systemPrompt` を Codex の developer instructions として渡せる
+- 返答が確定した時点で、左下の TTS が読み上げ（OpenAI でも Irodori-TTS でも可）
+- `systemPrompt` を Codex の developer instructions と realtime の開始指示の両方に渡す
+- 「Codex の起動コンテキストを含める」をオフにすると、Codex 標準の振る舞いを外してシステムプロンプトを優先させる
 - テキスト入力からの会話も可能（マイクなしで確認できる）
+
+### プリセット
+
+`Irodori-TTS（lab-02）` は `http://lab-02.internal.nanasi-apps.xyz:8088/v1` を指します。接続先は `IRODORI_BASE_URL` で変更できます。選ぶと LoRA モデルと `voice: none`、`irodori` オブジェクトが自動で設定されます。
 
 ## 必要なもの
 
@@ -60,6 +65,7 @@ pnpm start
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | 既定のモデル |
 | `OPENAI_TTS_VOICE` | `coral` | 既定のボイス |
 | `CODEX_BIN` | `codex` | app-server の起動コマンド |
+| `IRODORI_BASE_URL` | lab-02 の 8088 | Irodori-TTS プリセットの接続先 |
 | `HOST` / `PORT` | `127.0.0.1` / `8790` | API サーバー |
 
 API キーはブラウザからリクエストごとに送るだけで、サーバーには保存しません。
@@ -121,10 +127,18 @@ pnpm build && pnpm start   # 別ターミナルで起動しておく
 pnpm smoke:live
 ```
 
+`scripts/tts-smoke.mjs` は、指定した接続先で実際に音声を生成して WAV を書き出します。
+
+```bash
+node scripts/tts-smoke.mjs out.wav http://lab-02.internal.nanasi-apps.xyz:8088/v1 irodori-tts-renewa none "こんにちは"
+```
+
 ## 既知の制約
 
 - realtime は Codex の ChatGPT ログインが前提です。API キーだけでは `realtime conversation requires API key auth` で失敗します。
 - WebRTC の音声トラックは受け取る必要があります（realtime V3 の仕様）。受け取ったうえで再生しなければ、音は鳴りません。
+- マイク音声は WebRTC のメディアトラックで送ります。data channel 経由の音声投入（`input_audio.append`）は V3 では拒否されるため、実装していません。
 - GPT Live の応答生成はマイク入力（VAD）または `appendText` で始まります。`response.create` は Codex 委譲セッションでは使えません。
+- システムプロンプトは realtime の開始指示にも渡しますが、リアルタイムモデル側の素の振る舞いが残る場合があります。効きが弱いときは「Codex の起動コンテキストを含める」をオフにしてください。
 - Irodori の参照音声パスはサーバー側から見たパスです。
 - 生成はモデル読み込みを含め長くなる場合があり、既定のタイムアウトは 300 秒です（`SPEECH_TIMEOUT_MS`）。

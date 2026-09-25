@@ -1,4 +1,5 @@
 import type { ProviderPreset } from '../contract'
+import { irodoriBaseUrl } from './settings'
 
 export const APP_NAME = 'TTS Lab'
 export const APP_VERSION = '0.1.0'
@@ -35,20 +36,28 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     kind: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     hint: 'API キーが必要。gpt-4o-mini-tts / tts-1 / tts-1-hd。',
+    defaultModel: 'gpt-4o-mini-tts',
+    defaultVoice: 'coral',
+  },
+  {
+    id: 'irodori-lab02',
+    label: 'Irodori-TTS（lab-02）',
+    kind: 'irodori',
+    baseUrl: irodoriBaseUrl,
+    hint: 'lab-02 の Irodori-TTS-Server。voice は none、モデルは LoRA から選択。',
+    defaultModel: 'irodori-tts-renewa',
+    defaultVoice: 'none',
+    useIrodori: true,
   },
   {
     id: 'irodori-local',
     label: 'Irodori-TTS（ローカル 8088）',
     kind: 'irodori',
     baseUrl: 'http://127.0.0.1:8088/v1',
-    hint: 'Aratako/Irodori-TTS-Server の既定ポート。API キー不要。',
-  },
-  {
-    id: 'irodori-remote',
-    label: 'Irodori-TTS（リモート）',
-    kind: 'irodori',
-    baseUrl: '',
-    hint: 'リモートの Irodori-TTS-Server。CORS 許可が必要。',
+    hint: '手元で起動した Aratako/Irodori-TTS-Server。',
+    defaultModel: 'irodori-tts',
+    defaultVoice: 'none',
+    useIrodori: true,
   },
   {
     id: 'custom',

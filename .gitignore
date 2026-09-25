@@ -7,3 +7,4 @@ dist/
 .vite/
 coverage/
 scripts/*.log
+speech-*.wav
