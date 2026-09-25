@@ -6,7 +6,7 @@ import { writeFileSync } from 'node:fs'
 import { RTCPeerConnection } from 'werift'
 
 const BASE = 'http://127.0.0.1:8790/rpc'
-const LOG = new URL('./live-e2e.log', import.meta.url).pathname
+const LOG = new URL('./live-smoke.log', import.meta.url).pathname
 writeFileSync(LOG, '')
 function log(...parts) {
   const line = `${new Date().toISOString()} ${parts.join(' ')}\n`
@@ -65,7 +65,8 @@ const started = await rpc('live/start', {
     sdp: pc.localDescription.sdp,
     version: 'v3',
     voice: 'cove',
-    instructions: '日本語で、短く1文だけ返してください。',
+    systemPrompt: 'あなたは日本語で話すアシスタントです。短く1文だけ返してください。',
+    instructions: '落ち着いた速さではっきり話してください。',
     initialPrompt: 'これから音声で会話します。最初に短く挨拶してください。',
   },
 })
