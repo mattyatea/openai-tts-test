@@ -21,7 +21,8 @@ Vue 3 + Reka UI + Tailwind CSS の SPA と、Hono + oRPC の API サーバーで
 
 - ブラウザが WebRTC で直接 GPT Live（Codex app-server の realtime）と接続
 - GPT Live の音声トラックは受け取りますが、再生せず破棄できます
-- 返答が確定した時点で、左下の TTS が読み上げ（OpenAI でも Irodori-TTS でも可）
+- 返答が確定したら、その全文を 1 回のリクエストで読み上げ（OpenAI でも Irodori-TTS でも可）
+- 長文でも、Irodori 側が分割して返すチャンクから順に鳴らすので合成完了を待たない
 - `systemPrompt` を Codex の developer instructions と realtime の開始指示の両方に渡す
 - 「Codex の起動コンテキストを含める」をオフにすると、Codex 標準の振る舞いを外してシステムプロンプトを優先させる
 - テキスト入力からの会話も可能（マイクなしで確認できる）
@@ -160,5 +161,7 @@ Codex 本体の実装（`codex-rs/core/src/realtime_prompt.rs`）では、realti
 - マイク音声は WebRTC のメディアトラックで送ります。data channel 経由の音声投入（`input_audio.append`）は V3 では拒否されるため、実装していません。
 - GPT Live の応答生成はマイク入力（VAD）または `appendText` で始まります。`response.create` は Codex 委譲セッションでは使えません。
 - システムプロンプトは既定の Codex 人格を置き換えます。Codex 標準の振る舞いも一緒に消えるため、必要なら「Codex の起動コンテキストを追記する」をオンにしてください。
+- realtime のトランスクリプトは同じ発話を前置き付きで送り直します（「、教主」→「、教主様。」）。文単位で分割して読み上げると先頭が二重に読まれるため、アプリ側では分割せず、確定後に 1 回だけ生成します。
+- Irodori-TTS に前のリクエストの文脈を引き継ぐ仕組みはありません。`context_kv_cache` は同一リクエスト内で text / speaker / caption の K/V を事前計算する設定で、リクエスト間の記憶ではありません。長文チャンクも各チャンク独立に合成されるため、参照音声なしではチャンク間で声質が揺れることがあります。一貫させたいときは `ref_wav` / `ref_embed` / `caption` を指定してください。
 - Irodori の参照音声パスはサーバー側から見たパスです。
 - 生成はモデル読み込みを含め長くなる場合があり、既定のタイムアウトは 300 秒です（`SPEECH_TIMEOUT_MS`）。

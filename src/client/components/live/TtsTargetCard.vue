@@ -22,6 +22,7 @@ defineProps<{
   voiceOptions: Array<{ value: string; label: string }>
   pendingCount: number
   speaking: boolean
+  currentText: string
 }>()
 
 const emit = defineEmits<{ test: []; stop: []; preset: [id: string] }>()
@@ -98,6 +99,9 @@ const emit = defineEmits<{ test: []; stop: []; preset: [id: string] }>()
           待ち {{ pendingCount }} 件 / 再生中 {{ speaking ? 'あり' : 'なし' }}
         </span>
       </div>
+      <p v-if="currentText" class="rounded-lg border border-sky-900/60 bg-sky-950/30 px-2.5 py-1.5 text-[11px] text-sky-200">
+        読み上げ中: {{ currentText }}
+      </p>
     </div>
   </SectionCard>
 </template>

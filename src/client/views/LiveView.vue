@@ -124,7 +124,14 @@ const liveVoiceOptions = computed(() => {
   ]
 })
 
-/** 返答が確定したら、その本文だけを自分の TTS で読み上げる。 */
+/**
+ * 返答が確定したら、その全文を 1 回のリクエストで読み上げる。
+ *
+ * 文中で分割すると、realtime が同じ発話を前置き付きで送り直すたびに
+ * 先頭が二重に読まれてしまう。長文でも Irodori-TTS-Server 側が
+ * `chunk_min_chars` で分割して SSE で返すため、1 リクエストのままでも
+ * 最初のチャンクから鳴り始める。
+ */
 watch(
   () => live.transcripts.value.filter((entry) => entry.role === 'assistant' && entry.final).length,
   async (count, previous) => {
@@ -237,6 +244,7 @@ onBeforeUnmount(() => {
         :voice-options="ttsVoiceOptions"
         :pending-count="queue.pendingCount.value"
         :speaking="queue.speaking.value"
+        :current-text="queue.currentText.value"
         @test="testSpeak"
         @stop="queue.stop()"
         @preset="applyTtsPreset"

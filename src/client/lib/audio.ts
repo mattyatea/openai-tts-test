@@ -95,16 +95,23 @@ export interface StreamingSpeechHandle {
   stop: () => void
 }
 
+export interface PlayStreamOptions {
+  onProgress?: (info: { chunkCount: number; playing: boolean }) => void
+  onError?: (message: string) => void
+  /**
+   * 最初のチャンクを鳴らす前に待つ処理。
+   * 複数の文を先読みしつつ、再生だけを順番にしたいときに使う。
+   */
+  beforePlay?: () => Promise<void>
+}
+
 /**
  * tts.stream を購読し、チャンクが届くたびに順番に再生する。
  * Irodori は 1 チャンクが完全な音声ファイルなので、受信しながら鳴らせる。
  */
 export function playStream(
   request: Parameters<typeof client.tts.stream>[0],
-  options: {
-    onProgress?: (info: { chunkCount: number; playing: boolean }) => void
-    onError?: (message: string) => void
-  } = {},
+  options: PlayStreamOptions = {},
 ): StreamingSpeechHandle {
   const controller = new AbortController()
   let chunkCount = 0
@@ -138,6 +145,8 @@ export function playStream(
   async function run(): Promise<void> {
     // 受信したチャンクを、届いた順に直列で鳴らす。
     let chain: Promise<void> = Promise.resolve()
+    // 受信はすぐ始め、再生の順番待ちだけをここで待つ。
+    const ready = options.beforePlay?.() ?? Promise.resolve()
     try {
       const iterator = await client.tts.stream(request, { signal: controller.signal })
       for await (const event of iterator) {
@@ -149,8 +158,12 @@ export function playStream(
         if (event.type !== 'chunk') continue
         chunkCount += 1
         const blob = new Blob([base64ToArrayBuffer(event.audioBase64)], { type: event.mediaType })
-        options.onProgress?.({ chunkCount, playing: true })
-        chain = chain.then(() => playBlob(blob))
+        chain = chain.then(async () => {
+          await ready
+          if (stopped) return
+          options.onProgress?.({ chunkCount, playing: true })
+          await playBlob(blob)
+        })
       }
       await chain
     } finally {

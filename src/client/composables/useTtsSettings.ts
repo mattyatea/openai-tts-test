@@ -21,6 +21,8 @@ export interface TtsSettings {
   useSse: boolean
   /** GPT Live ページでのみ使う: 返答確定後に自動で読み上げるか。 */
   autoSpeak: boolean
+  /** ストリーミング合成を使うか。OpenAI の tts-1 / tts-1-hd は非対応。 */
+  useStreaming: boolean
 }
 
 export function createTtsSettings(overrides: Partial<TtsSettings> = {}): TtsSettings {
@@ -39,6 +41,7 @@ export function createTtsSettings(overrides: Partial<TtsSettings> = {}): TtsSett
     useInstructions: false,
     useSse: false,
     autoSpeak: true,
+    useStreaming: true,
     ...overrides,
   }
 }
