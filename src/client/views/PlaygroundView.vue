@@ -1,0 +1,218 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+
+import ConnectionCard from '../components/playground/ConnectionCard.vue'
+import IrodoriCard from '../components/playground/IrodoriCard.vue'
+import NotesCard from '../components/playground/NotesCard.vue'
+import RequestCard from '../components/playground/RequestCard.vue'
+import RequestPreviewCard from '../components/playground/RequestPreviewCard.vue'
+import RunCard from '../components/playground/RunCard.vue'
+import TextCard from '../components/playground/TextCard.vue'
+import { useIrodoriOptions } from '../composables/useIrodoriOptions'
+import { useServerInfo } from '../composables/useServerInfo'
+import { useToast } from '../composables/useToast'
+import { useTtsOptionLists, useTtsSettings } from '../composables/useTtsSettings'
+import { useUpstreamProbe } from '../composables/useUpstreamProbe'
+import { downloadBlob, speakToUrl, type SpeakOutcome } from '../lib/audio'
+import { errorMessage } from '../lib/orpc'
+import { useLocalStorage } from '../lib/useLocalStorage'
+
+const toast = useToast()
+const { info } = useServerInfo()
+const probe = useUpstreamProbe()
+const { settings, buildRequest } = useTtsSettings('tts-lab.playground.settings')
+const text = useLocalStorage('tts-lab.playground.text', 'こんにちは。これは OpenAI TTS の動作確認です。')
+
+const irodoriEnabled = ref(false)
+const irodori = useIrodoriOptions(irodoriEnabled)
+
+const running = ref(false)
+const runError = ref<string | null>(null)
+const result = ref<SpeakOutcome | null>(null)
+const lastHeaders = ref<Record<string, string>>({})
+
+const kind = computed(
+  () => info.value?.presets.find((preset) => preset.id === settings.value.presetId)?.kind ?? 'custom',
+)
+
+const { modelOptions, voiceOptions, formatOptions } = useTtsOptionLists(info)
+
+/** 取得済みの upstream モデル・ボイスも候補に混ぜる。 */
+const mergedModelOptions = computed(() => {
+  const base = modelOptions.value.map((option) => option.value)
+  const extra = kind.value === 'irodori' ? ['irodori-tts'] : []
+  const merged = [...new Set([...base, ...extra, ...probe.models.value.map((model) => model.id)])]
+  return merged.map((value) => ({ value, label: value }))
+})
+
+const mergedVoiceOptions = computed(() => {
+  const base = kind.value === 'openai' ? voiceOptions.value.map((option) => option.value) : []
+  const extra = kind.value === 'irodori' ? ['none'] : []
+  const merged = [
+    ...new Set([...base, ...extra, ...probe.voices.value.map((voice) => voice.id), settings.value.voice]),
+  ].filter(Boolean)
+  return merged.map((value) => ({ value, label: value }))
+})
+
+const builtRequest = computed(() =>
+  buildRequest(text.value, { irodori: irodori.build() }),
+)
+
+const requestJson = computed(() => {
+  try {
+    return JSON.stringify(builtRequest.value, null, 2)
+  } catch (caught) {
+    return `リクエストを組み立てられません: ${errorMessage(caught)}`
+  }
+})
+
+const curl = computed(() => {
+  const auth = settings.value.apiKey ? `  -H "Authorization: Bearer ${settings.value.apiKey}" \\\n` : ''
+  return [
+    `curl -sS ${settings.value.baseUrl}/audio/speech \\`,
+    '  -H "Content-Type: application/json" \\',
+    `${auth}  -d '${requestJson.value.replace(/'/g, `'\\''`)}' \\`,
+    `  --output speech.${settings.value.format}`,
+  ].join('\n')
+})
+
+watch(
+  () => info.value,
+  (value) => {
+    if (!value) return
+    if (!settings.value.baseUrl) settings.value.baseUrl = value.defaults.baseUrl
+    const matched = value.presets.find((preset) => preset.baseUrl === settings.value.baseUrl)
+    settings.value.presetId = matched?.id ?? 'custom'
+    irodoriEnabled.value = matched?.kind === 'irodori'
+  },
+  { once: true },
+)
+
+function applyPreset(id: string): void {
+  const preset = info.value?.presets.find((entry) => entry.id === id)
+  if (!preset) return
+  settings.value.presetId = id
+  if (preset.baseUrl) settings.value.baseUrl = preset.baseUrl
+  if (preset.kind === 'irodori') {
+    settings.value.model = 'irodori-tts'
+    settings.value.voice = 'none'
+    irodoriEnabled.value = true
+  } else if (preset.kind === 'openai') {
+    settings.value.model = info.value?.openaiModels[0] ?? 'gpt-4o-mini-tts'
+    settings.value.voice = info.value?.openaiVoices[0] ?? 'coral'
+    irodoriEnabled.value = false
+  } else {
+    irodoriEnabled.value = false
+  }
+}
+
+async function checkUpstream(): Promise<void> {
+  const outcome = await probe.check(settings.value.baseUrl, settings.value.apiKey || undefined)
+  if (outcome.tone === 'error') toast.error('接続できません', outcome.message)
+}
+
+async function loadModels(): Promise<void> {
+  const outcome = await probe.loadModels(settings.value.baseUrl, settings.value.apiKey || undefined)
+  if (!outcome.ok) {
+    toast.error('モデル取得に失敗', outcome.error)
+    return
+  }
+  toast.ok(`モデル ${probe.models.value.length} 件を取得しました`)
+}
+
+async function loadVoices(): Promise<void> {
+  const outcome = await probe.loadVoices(settings.value.baseUrl, settings.value.apiKey || undefined)
+  if (!outcome.ok) {
+    toast.error('ボイス取得に失敗', outcome.error)
+    return
+  }
+  if (probe.voicesSupported.value === false) {
+    toast.show('ボイス一覧なし', 'この upstream は /v1/audio/voices を持ちません')
+    return
+  }
+  toast.ok(`ボイス ${probe.voices.value.length} 件を取得しました`)
+}
+
+async function run(): Promise<void> {
+  if (running.value) return
+  if (!text.value.trim()) {
+    toast.error('テキストを入力してください')
+    return
+  }
+  running.value = true
+  runError.value = null
+  if (result.value) URL.revokeObjectURL(result.value.url)
+  result.value = null
+  try {
+    const outcome = await speakToUrl(builtRequest.value, settings.value.pcmRate)
+    result.value = outcome
+    lastHeaders.value = outcome.headers
+    toast.ok(`生成しました（${(outcome.bytes / 1024).toFixed(1)} KB / ${outcome.elapsedMs} ms）`)
+  } catch (caught) {
+    runError.value = errorMessage(caught)
+    toast.error('生成に失敗しました', runError.value)
+  } finally {
+    running.value = false
+  }
+}
+
+function download(): void {
+  if (!result.value) return
+  downloadBlob(result.value.blob, `speech.${settings.value.format}`)
+}
+
+function copy(value: string, label: string): void {
+  void navigator.clipboard.writeText(value).then(
+    () => toast.ok(`${label} をコピーしました`),
+    () => toast.error('コピーできませんでした'),
+  )
+}
+</script>
+
+<template>
+  <div class="grid gap-4 lg:grid-cols-[minmax(360px,1fr)_minmax(460px,1.1fr)]">
+    <div class="flex flex-col gap-4">
+      <ConnectionCard
+        v-model="settings"
+        :kind="kind"
+        :presets="info?.presets ?? []"
+        :probe="probe.state.value"
+        :has-server-api-key="info?.defaults.hasServerApiKey ?? false"
+        @preset="applyPreset"
+        @check="checkUpstream"
+        @models="loadModels"
+        @voices="loadVoices"
+      />
+
+      <RequestCard
+        v-model="settings"
+        :model-options="mergedModelOptions"
+        :voice-options="mergedVoiceOptions"
+        :format-options="formatOptions"
+      />
+
+      <IrodoriCard
+        v-model:enabled="irodoriEnabled"
+        v-model:fields="irodori.fields"
+        :available="kind === 'irodori'"
+      />
+    </div>
+
+    <div class="flex flex-col gap-4">
+      <TextCard v-model="text" :emoji="info?.irodoriEmoji ?? []" />
+
+      <RunCard
+        :running="running"
+        :error="runError"
+        :result="result"
+        :headers="lastHeaders"
+        @run="run"
+        @download="download"
+      />
+
+      <RequestPreviewCard :request-json="requestJson" :curl="curl" @copy="copy" />
+
+      <NotesCard />
+    </div>
+  </div>
+</template>
